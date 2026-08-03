@@ -14,10 +14,11 @@ export interface SandboxLimits {
   gpus: string; // "all" or "" (none)
 }
 
-/** The node specs advertised at registration. */
+/**
+ * The node specs advertised at registration. Owner and payout address are
+ * deliberately absent — both come from the API key the agent authenticates with.
+ */
 export interface RegisterNodeRequest {
-  ownerAddr: string;
-  payToAddr: string;
   label: string;
   cpuCores: number;
   ramMb: number;
@@ -28,22 +29,32 @@ export interface RegisterNodeRequest {
 /**
  * agent -> registry: authenticate the socket, registering (or re-attaching to)
  * a node. Carries the node's advertised specs so registration + auth happen in
- * one signed message.
+ * one message.
+ *
+ * Auth is an API key minted in the web UI by a signed-in wallet. The agent
+ * therefore holds no Algorand private key: the key's owner *is* the node's owner
+ * and payout address, so neither can be spoofed from the contributor's env.
  */
 export interface AgentHelloMsg {
   /** Existing node id to re-attach to, or omit/empty to create a new one. */
   nodeId?: string;
-  ownerAddr: string;
-  /** Base64 algosdk.signBytes signature over `nonce`, proving ownership of ownerAddr. */
-  signature: string;
-  nonce: string;
+  /** Contributor API key (`tnd_…`) from the web UI's contributor section. */
+  apiKey: string;
   /** Advertised node specs. */
   spec: RegisterNodeRequest;
 }
 
-/** registry -> agent: hello accepted; the canonical node id to use henceforth. */
+/**
+ * registry -> agent: hello accepted. Carries the canonical node id plus the
+ * settings the contributor no longer configures locally — the backend owns the
+ * tunnel and the payout address.
+ */
 export interface HelloAckMsg {
   nodeId: string;
+  /** Wallet that minted the API key — earns for this node. */
+  ownerAddr: string;
+  /** Reverse-tunnel settings for the sandbox, chosen by the backend. */
+  bore: { server: string; secret: string };
 }
 
 /** agent -> registry: periodic liveness ping. */

@@ -12,17 +12,15 @@ import {
   type StartContainerMsg,
 } from "./protocol.js";
 import { config } from "./config.js";
-import { loadKey } from "./keys.js";
 import { detectSpecs } from "./specs.js";
 import { runInSandbox, startSandbox, stopSandbox } from "./docker.js";
 
-if (!config.privateKeyB64) {
-  console.error("AVM_PRIVATE_KEY is required. Generate one with: npm run keygen");
+if (!config.apiKey) {
+  console.error(
+    "TENDRIL_API_KEY is required. Sign in at the Tendril web app, open Contribute, and mint one.",
+  );
   process.exit(1);
 }
-
-const { address, signNonce } = loadKey(config.privateKeyB64);
-const payToAddr = config.payToAddr || address;
 
 /** Lease ids of sandboxes this agent is currently hosting. */
 const activeLeases = new Set<string>();
@@ -30,21 +28,16 @@ let nodeId: string | undefined;
 
 async function main() {
   const specs = await detectSpecs();
-  console.log(`[agent] owner=${address}`);
+  console.log(`[agent] registry: ${config.registryUrl}`);
   console.log(`[agent] specs: ${specs.cpuCores} CPU, ${specs.ramMb}MB RAM, GPU=${specs.gpu ?? "none"}`);
-  console.log(`[agent] price: $${config.pricePerHourUsd}/hr -> paid to ${payToAddr}`);
+  console.log(`[agent] price: $${config.pricePerHourUsd}/hr`);
 
-  const nonce = await fetchNonce();
   const socket = io(config.registryUrl, { transports: ["websocket"] });
 
   socket.on("connect", () => {
     const hello: AgentHelloMsg = {
-      ownerAddr: address,
-      signature: signNonce(nonce),
-      nonce,
+      apiKey: config.apiKey,
       spec: {
-        ownerAddr: address,
-        payToAddr,
         label: config.label,
         cpuCores: specs.cpuCores,
         ramMb: specs.ramMb,
@@ -57,7 +50,11 @@ async function main() {
 
   socket.on(WS.helloAck, (ack: HelloAckMsg) => {
     nodeId = ack.nodeId;
-    console.log(`[agent] registered as node ${nodeId}; sending heartbeats`);
+    // The registry owns the tunnel settings, so a sandbox started after this
+    // point uses whatever it just told us — nothing to configure locally.
+    config.sandbox.boreServer = ack.bore.server;
+    config.sandbox.boreSecret = ack.bore.secret;
+    console.log(`[agent] registered as node ${nodeId}; earnings go to ${ack.ownerAddr}`);
     setInterval(() => {
       const hb: HeartbeatMsg = { nodeId: nodeId! };
       socket.emit(WS.heartbeat, hb);
@@ -77,13 +74,6 @@ async function main() {
     await shutdown();
     process.exit(0);
   });
-}
-
-async function fetchNonce(): Promise<string> {
-  const res = await fetch(`${config.registryUrl}/auth/nonce?address=${address}`);
-  if (!res.ok) throw new Error(`failed to fetch nonce: ${res.status}`);
-  const data = (await res.json()) as { nonce: string };
-  return data.nonce;
 }
 
 async function handleStart(socket: Socket, msg: StartContainerMsg) {

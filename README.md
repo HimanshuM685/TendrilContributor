@@ -1,14 +1,14 @@
 # 🌿 Tendril — Contributor Agent
 
-**Rent out your machine's CPU / RAM / GPU and get paid on-chain in USDC.**
+**Rent out your machine's CPU / RAM / GPU and get paid in USDC.**
 
-This is the daemon a contributor runs. It registers your machine with a Tendril backend/registry,
+This is the daemon a contributor runs. It registers your machine with the Tendril registry,
 heartbeats to stay listed, and when someone rents it, spins up a **hardened, ephemeral Docker SSH
-sandbox** — torn down the moment the paid lease ends. Earnings are settled to your Algorand address
-in USDC by the backend when the lease closes.
+sandbox** — torn down the moment the paid lease ends. Each closed lease credits your **earnings
+balance** (after the platform fee), and you withdraw that balance to your wallet from the web app.
 
-Standalone: it needs nothing from the rest of the Tendril monorepo, just a `REGISTRY_URL` to point
-at.
+Standalone: it needs nothing from the rest of the Tendril monorepo, and nothing but an API key to
+configure.
 
 ## The trust model (why this is safe to run)
 
@@ -23,19 +23,22 @@ system — it's the container:
 - hard CPU / memory / PID caps (cgroups),
 - `--rm`: **destroyed the moment the lease ends.**
 
-Your private key never leaves this process. It signs a nonce to prove node ownership — nothing else.
+**This machine holds no wallet key.** It authenticates with an API key you mint in the web app; the
+wallet that minted it owns the node and receives the earnings. Losing the key costs you a node
+registration, not funds — revoke it in the web app and mint another.
 
 ## How it works
 
 ```
    Your PC (this agent)                       Backend / registry
  ┌───────────────────────────┐  WebSocket   ┌────────────────────────┐
- │ 1. sign nonce  → hello    │◄────────────►│ verifies the signature │
- │ 2. heartbeat every 10s    │              │ lists your node        │
+ │ 1. API key     → hello    │◄────────────►│ resolves it to your    │
+ │                           │              │ wallet, lists the node │
+ │ 2. heartbeat every 10s    │              │                        │
  │ 3. start-container        │◄─────────────│ someone paid + rented  │
  │      docker run (hardened)│              │                        │
  │    → container-ready      │─────────────►│ hands renter host:port │
- │ 4. destroy-container      │◄─────────────│ lease ended            │
+ │ 4. destroy-container      │◄─────────────│ lease ended → you earn │
  └───────────┬───────────────┘              └────────────────────────┘
              │ bore tunnel (dials OUT)
              ▼
@@ -44,10 +47,9 @@ Your private key never leaves this process. It signs a nonce to prove node owner
 
 | File | What it is |
 |---|---|
-| [src/index.ts](src/index.ts) | The daemon: connect, prove ownership, heartbeat, handle lease messages |
+| [src/index.ts](src/index.ts) | The daemon: connect, authenticate, heartbeat, handle lease messages |
 | [src/docker.ts](src/docker.ts) | Sandbox lifecycle — the hardened `docker run`, bore endpoint discovery, teardown |
 | [src/config.ts](src/config.ts) | Every env var, in one place |
-| [src/keys.ts](src/keys.ts) / [src/keygen.ts](src/keygen.ts) | Load a key / generate one |
 | [src/specs.ts](src/specs.ts) | Detects the CPU / RAM / GPU this node advertises |
 | [src/protocol.ts](src/protocol.ts) | The registry ↔ agent WebSocket contract (types + event names) |
 | [sandbox-ssh/](sandbox-ssh/) | The sandbox image: sshd + python3 + bore, built locally on first rent |
@@ -56,34 +58,31 @@ Your private key never leaves this process. It signs a nonce to prove node owner
 
 - **Node 20+** and npm
 - **Docker**, daemon running — the sandboxes are containers on your host
-- A reachable **Tendril backend** (`REGISTRY_URL`)
-- An **Algorand account** holding a little ALGO and **opted in to USDC** (testnet ASA `10458941`)
-  — that's the address earnings are paid to. Opt in via the
-  [asset dispenser](https://asset-dispenser.testnet.algorand.network/); the opt-in fee needs
-  [testnet ALGO](https://bank.testnet.algorand.network/). Not opted in → payouts are recorded as
-  unpaid and your node gets flagged `payoutBlocked`.
+- A **Tendril API key** — connect your wallet in the web app, sign in, open **CONTRIBUTE**, and
+  click **MINT API KEY**. It's shown once.
 - Outbound network for the bore tunnel (nothing to open inbound)
+
+To *withdraw* what you earn, the same wallet must be opted in to USDC (testnet ASA `10458941`) —
+but only at withdrawal time. Earnings accrue either way.
 
 ## Quick start
 
 ```bash
 npm install
-npm run keygen                  # prints Address + AVM_PRIVATE_KEY
-
-cp .env.example .env            # set AVM_PRIVATE_KEY, REGISTRY_URL, PRICE_PER_HOUR_USD
+cp .env.example .env            # paste TENDRIL_API_KEY, set NODE_LABEL + PRICE_PER_HOUR_USD
 npm run dev                     # …or `npm run start` without file-watching
 ```
 
 You should see:
 
 ```
-[agent] owner=ABC…XYZ
+[agent] registry: https://tendrilregister.007575.xyz
 [agent] specs: 8 CPU, 16384MB RAM, GPU=none
-[agent] price: $1/hr -> paid to ABC…XYZ
-[agent] registered as node n_… ; sending heartbeats
+[agent] price: $1/hr
+[agent] registered as node n_… ; earnings go to ABC…XYZ
 ```
 
-Your node is now listed in the backend's `/explorer` and rentable.
+Your node is now listed in the explorer and rentable.
 
 > The SSH sandbox image builds locally on the **first rent**, then is cached. That build compiles
 > `bore` from source for your CPU arch (~30s), so the tunnel works on both x86_64 and arm64 — bore
@@ -94,7 +93,7 @@ Same machine as the renter? Set `TUNNEL_MODE=local` to skip bore and publish SSH
 ## Run with Docker
 
 ```bash
-cp .env.example .env            # set REGISTRY_URL + AVM_PRIVATE_KEY
+cp .env.example .env            # paste TENDRIL_API_KEY
 docker compose up --build
 ```
 
@@ -104,6 +103,15 @@ default `TUNNEL_MODE=bore` no inbound ports are needed. `network_mode: host` is 
 `TUNNEL_MODE=local` — and on Docker Desktop (Mac/Windows) host networking doesn't share the
 loopback, so for local mode run the agent natively instead.
 
+## Getting paid
+
+1. Leases you serve credit your **earnings balance**, post-fee, when each one closes.
+2. Open **CONTRIBUTE** in the web app with the wallet that minted your key to see the balance.
+3. **WITHDRAW** sends the whole balance to that wallet in one on-chain transfer.
+
+There is a **$5 minimum withdrawal**. One transfer costs the same whether it moves five dollars or
+five cents, so the balance accrues instead of trickling out as dust.
+
 ## Configuration
 
 Everything is read from `.env` (see [.env.example](.env.example)); an inline
@@ -111,18 +119,18 @@ Everything is read from `.env` (see [.env.example](.env.example)); an inline
 
 | Variable | Default | What it does |
 |---|---|---|
-| `AVM_PRIVATE_KEY` | — | **Required.** Base64 64-byte Algorand key. Proves node ownership; its address receives earnings. |
-| `REGISTRY_URL` | `http://localhost:4000` | The backend to register with. A bare host gets `http://` prepended. |
-| `PAYTO_ADDR` | the signing address | Pay earnings somewhere else. |
+| `TENDRIL_API_KEY` | — | **Required.** Minted in the web app. Identifies the node and names the wallet that earns for it. |
 | `NODE_LABEL` | `tendril-node` | Human label shown in the explorer. |
 | `PRICE_PER_HOUR_USD` | `1.0` | Advertised hourly price. USDC has 6 decimals, so this × 1e6 is the atomic rate — no exchange rate to keep current. |
 | `SANDBOX_IMAGE` | `tendril-ssh-sandbox:latest` | Left as the default it's built from `./sandbox-ssh`; set it and the image is yours to manage (never rebuilt). |
 | `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `2g` / `2` | Per-sandbox cgroup caps. A `--cpus` above the daemon's CPU count is clamped, not rejected. |
 | `SANDBOX_GPUS` | *(empty)* | `all` to pass GPUs through (needs nvidia-container-toolkit). |
 | `TUNNEL_MODE` | `bore` | `bore` = dial out (works anywhere); `local` = publish SSH to `127.0.0.1`. |
-| `BORE_SERVER` | `bore.pub` | The public one is rate-limited/flaky — self-host `bore server` and point here. |
-| `BORE_SECRET` | *(empty)* | Shared secret for a self-hosted `bore server --secret <s>`. |
 | `HEARTBEAT_INTERVAL_MS` | `10000` | Liveness ping interval. |
+| `REGISTRY_URL` | the hosted registry | Only for self-hosting the backend. A bare host gets `http://` prepended. |
+
+The bore server and its secret are **not** configured here — the registry sends them in the hello
+ack, so the platform can move every node at once.
 
 ## Notes & limitations
 
@@ -134,8 +142,7 @@ Everything is read from `.env` (see [.env.example](.env.example)); an inline
   address). Fine for ephemeral compute, but a password is a password.
 - **Nothing is persisted.** Live leases are in memory; a restart drops them (the sockets die
   anyway). `SIGINT` destroys every sandbox on the way out.
-- **Payouts are the backend's job.** This agent never touches money — it only advertises a price and
-  a payout address. If the backend has no signing key, or your address never opted into USDC,
-  earnings are recorded as unpaid instead.
+- **Money is the backend's job.** This agent never touches funds — it advertises a price, and the
+  backend credits your balance when a lease closes.
 - **Job execution** (`run-job`) pipes the payload to `python3` inside an existing lease's sandbox
   with a 120s timeout.

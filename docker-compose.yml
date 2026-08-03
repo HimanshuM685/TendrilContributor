@@ -1,6 +1,6 @@
 # Tendril contributor agent — share THIS machine's compute.
 #
-#   cp .env.example .env      # set REGISTRY_URL + AVM_PRIVATE_KEY
+#   cp .env.example .env      # set TENDRIL_API_KEY (minted in the web app)
 #   docker compose up --build
 #
 # Use `docker-compose` (with the hyphen) if you're on Compose v1.
