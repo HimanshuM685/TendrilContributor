@@ -1,0 +1,22 @@
+# Tendril contributor agent — share THIS machine's compute.
+#
+#   cp .env.example .env      # set REGISTRY_URL + AVM_PRIVATE_KEY
+#   docker compose up --build
+#
+# Use `docker-compose` (with the hyphen) if you're on Compose v1.
+
+services:
+  contributor:
+    build: .
+    image: tendril-contributor
+    env_file: .env
+    # Launches sandboxes on the HOST Docker daemon (via the mounted socket) so it
+    # needs no Docker-in-Docker of its own. In the default TUNNEL_MODE=bore, each
+    # sandbox dials OUT for SSH, so host networking is NOT required.
+    #   ⚠ network_mode: host is only needed for TUNNEL_MODE=local (same-machine
+    #   SSH), and it doesn't share the host loopback on Docker Desktop (Mac/Win) —
+    #   there, run the agent natively (`npm run dev`) for local mode.
+    # network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
