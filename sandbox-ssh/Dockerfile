@@ -23,7 +23,8 @@ RUN cargo install bore-cli --version ${BORE_VERSION} --locked --root /out
 FROM python:3.12-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends openssh-server ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir numpy pandas matplotlib requests
 COPY --from=bore /out/bin/bore /usr/local/bin/bore
 
 COPY entrypoint.sh /entrypoint.sh
