@@ -5,9 +5,8 @@ import { createConnection, createServer } from "node:net";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { SandboxLimits, LeaseRelay } from "./protocol.js";
+import type { SandboxLimits } from "./protocol.js";
 import { config } from "./config.js";
-import { command } from "./runtime/process.js";
 
 const execFileP = promisify(execFile);
 
@@ -73,7 +72,7 @@ function sandboxTag(): string | null {
   const entrypoint = join(SANDBOX_CTX, "entrypoint.sh");
   if (!existsSync(dockerfile)) return null;
   const h = createHash("sha256");
-  for (const f of [dockerfile, entrypoint, ...["tendril-init.sh", "guest.py", "job.py", "tls_bridge.py", "tunnel.py"].map((f) => join(SANDBOX_CTX, f))]) {
+  for (const f of [dockerfile, entrypoint]) {
     if (existsSync(f)) h.update(readFileSync(f));
   }
   return `tendril-ssh-sandbox:${h.digest("hex").slice(0, 12)}`;
@@ -84,10 +83,10 @@ function sandboxTag(): string | null {
  * used, which may differ from `image` when we substitute a content-tagged build
  * of the bundled sandbox.
  */
-export async function ensureImage(image: string): Promise<string> {
+async function ensureImage(image: string): Promise<string> {
   // An explicitly configured SANDBOX_IMAGE is the operator's to manage: we only
   // check it exists and never rebuild it from our context.
-  const bundled = image === "tendril-ssh-sandbox:latest" && existsSync(join(SANDBOX_CTX, "Dockerfile"));
+  const bundled = image === config.sandbox.image && existsSync(join(SANDBOX_CTX, "Dockerfile"));
   const tag = bundled ? (sandboxTag() ?? image) : image;
 
   try {
@@ -104,7 +103,7 @@ export async function ensureImage(image: string): Promise<string> {
 }
 
 /**
- * Start a hardened, ephemeral legacy SSH sandbox (shared host kernel):
+ * Start a hardened, ephemeral SSH sandbox. The hardening IS the safety model:
  *   --rm                       container is discarded on exit
  *   no -v host mounts          the host filesystem is never exposed
  *   --cap-drop ALL + a minimal add-back   only what sshd needs to let root in
@@ -119,13 +118,9 @@ export async function startSandbox(
   limits: SandboxLimits,
   sshPassword: string | null,
   sshPubKey: string | null,
-  internal = false,
-  relay?: LeaseRelay,
-  signal?: AbortSignal,
 ): Promise<SandboxEndpoint> {
   const image = imageOverride || config.sandbox.image;
   const runImage = await ensureImage(image);
-  signal?.throwIfAborted();
   const name = containerName(leaseId);
   const memory = limits.memory || config.sandbox.memory;
   // Clamp to what the daemon actually has — `docker run` rejects a --cpus value
@@ -139,7 +134,7 @@ export async function startSandbox(
   }
   const cpus = String(cpusNum);
   const gpus = limits.gpus || config.sandbox.gpus;
-  const local = !relay?.ssh && config.tunnelMode === "local";
+  const local = config.tunnelMode === "local";
 
   const args = [
     "run",
@@ -178,22 +173,19 @@ export async function startSandbox(
     "no-new-privileges",
   ];
 
-  // Agent key can coexist with renter password; renter key disables password.
+  // Exactly one of the two: a key the renter brought, or their address as the
+  // password. The entrypoint locks the root password outright under key auth.
   if (sshPubKey) {
     args.push("-e", `SSH_PUBKEY=${sshPubKey}`);
-  }
-  if (sshPassword) {
+  } else if (sshPassword) {
     args.push("-e", `SSH_PASSWORD=${sshPassword}`);
   }
 
   let hostPort = 0;
-  if (internal) {
-    args.push("-e", "NO_BORE=1");
-  } else if (local) {
+  if (local) {
     hostPort = await getFreePort();
     args.push("-e", "NO_BORE=1", "-p", `127.0.0.1:${hostPort}:22`);
   } else {
-    if (relay?.ssh) args.push("-e", `TENDRIL_RELAY_JSON=${JSON.stringify(relay)}`);
     args.push("-e", `BORE_SERVER=${config.sandbox.boreServer}`);
     // bore (client) authenticates to a self-hosted server via BORE_SECRET.
     if (config.sandbox.boreSecret) args.push("-e", `BORE_SECRET=${config.sandbox.boreSecret}`);
@@ -203,27 +195,22 @@ export async function startSandbox(
 
   console.log(
     `[docker] starting SSH sandbox ${name} (${runImage})` +
-      (internal ? " (private exec)" : local ? ` on 127.0.0.1:${hostPort}` : " via TLS relay"),
+      (local ? ` on 127.0.0.1:${hostPort}` : ` via bore (${config.sandbox.boreServer})`),
   );
-  // execFile errors include argv, which contains credentials. Never propagate them.
-  try { await command("docker", args, { signal, timeoutMs: 60_000 }); }
-  catch { throw new Error("Docker sandbox launch failed"); }
-
-  if (internal) return { leaseId, containerName: name, host: "", port: 0 };
+  await execFileP("docker", args, { maxBuffer: 10 * 1024 * 1024 });
 
   if (local) {
-    await waitForPort(hostPort, 60_000, signal);
+    await waitForPort(hostPort);
     return { leaseId, containerName: name, host: "127.0.0.1", port: hostPort };
   }
-  const { host, port } = await waitForBoreEndpoint(name, 60_000, signal);
+  const { host, port } = await waitForBoreEndpoint(name);
   return { leaseId, containerName: name, host, port };
 }
 
 /** Poll a TCP port until it accepts a connection (local-mode readiness). */
-async function waitForPort(port: number, timeoutMs = 60_000, signal?: AbortSignal): Promise<void> {
+async function waitForPort(port: number, timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    signal?.throwIfAborted();
     const ok = await new Promise<boolean>((res) => {
       const sock = createConnection({ host: "127.0.0.1", port });
       sock.setTimeout(2000);
@@ -249,9 +236,7 @@ const BORE_RE = /listening at ([a-zA-Z0-9.\-]+):(\d+)/i;
 function waitForBoreEndpoint(
   name: string,
   timeoutMs = 60_000,
-  signal?: AbortSignal,
 ): Promise<{ host: string; port: number }> {
-  signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn("docker", ["logs", "-f", name], { stdio: ["ignore", "pipe", "pipe"] });
     let settled = false;
@@ -259,7 +244,6 @@ function waitForBoreEndpoint(
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      signal?.removeEventListener("abort", abort);
       child.kill("SIGKILL");
       fn();
     };
@@ -267,9 +251,6 @@ function waitForBoreEndpoint(
       () => finish(() => reject(new Error("bore endpoint not announced in time"))),
       timeoutMs,
     );
-    const abort = () => finish(() => reject(new Error("sandbox start cancelled")));
-    signal?.addEventListener("abort", abort, { once: true });
-    if (signal?.aborted) abort();
     const onData = (buf: Buffer) => {
       const m = buf.toString().match(BORE_RE);
       if (m) finish(() => resolve({ host: m[1], port: Number(m[2]) }));
@@ -281,20 +262,33 @@ function waitForBoreEndpoint(
   });
 }
 
-/** Guest runner bounds output and kills the guest process group at deadline. */
-export async function runInSandbox(
+/** Run a Python script inside the sandbox via `docker exec`, returning output. */
+export function runInSandbox(
   leaseId: string,
   payload: string,
   timeoutMs = 120_000,
-  signal?: AbortSignal,
 ): Promise<{ ok: boolean; output: string }> {
   const name = containerName(leaseId);
-  try {
-    const result = await command("docker", ["exec", "-i", name, "/usr/local/bin/tendril-job"], {
-      input: JSON.stringify({ payload, timeout: timeoutMs / 1000 }), signal, timeoutMs: timeoutMs + 2000,
+  return new Promise((resolve) => {
+    const child = spawn("docker", ["exec", "-i", name, "python3", "-"], {
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    return JSON.parse(result.stdout) as { ok: boolean; output: string };
-  } catch (err) { return { ok: false, output: (err as Error).message }; }
+    let out = "";
+    let err = "";
+    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
+    child.stdout.on("data", (d) => (out += d.toString()));
+    child.stderr.on("data", (d) => (err += d.toString()));
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      resolve({ ok: code === 0, output: code === 0 ? out : `${out}\n${err}`.trim() });
+    });
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ ok: false, output: String(e) });
+    });
+    child.stdin.write(payload);
+    child.stdin.end();
+  });
 }
 
 /** Forcibly remove the sandbox container (idempotent). */
@@ -304,12 +298,6 @@ export async function stopSandbox(leaseId: string): Promise<void> {
     await execFileP("docker", ["rm", "-f", name]);
     console.log(`[docker] removed sandbox ${name}`);
   } catch {
-    try {
-      await execFileP("docker", ["container", "inspect", name]);
-    } catch (err) {
-      if (/No such (container|object)/i.test(String((err as { stderr?: string }).stderr))) return;
-      throw err;
-    }
-    throw new Error("Docker sandbox still exists after removal");
+    /* already gone */
   }
 }
