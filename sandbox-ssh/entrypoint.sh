@@ -9,22 +9,26 @@ set -e
 mkdir -p /run/sshd
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 
+# Neither set: the Docker image default. A microVM passes both so the agent
+# can exec over the tap while the renter still uses a password.
+if [ -z "${SSH_PUBKEY}" ] && [ -z "${SSH_PASSWORD}" ]; then
+  SSH_PASSWORD=tendril
+fi
+
 if [ -n "${SSH_PUBKEY}" ]; then
-  # Key auth: the renter brought their own key, so no password exists at all.
-  # This is the only mode available to a caller with no session — there is no
-  # wallet address to use as a password.
   mkdir -p /root/.ssh
   printf '%s\n' "${SSH_PUBKEY}" > /root/.ssh/authorized_keys
   chmod 700 /root/.ssh
   chmod 600 /root/.ssh/authorized_keys
-  passwd -l root >/dev/null 2>&1 || true
-  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
   sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
-else
-  # Password auth: the renter's own address is the password.
-  : "${SSH_PASSWORD:=tendril}"
+fi
+
+if [ -n "${SSH_PASSWORD}" ]; then
   echo "root:${SSH_PASSWORD}" | chpasswd
   sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+else
+  passwd -l root >/dev/null 2>&1 || true
+  sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 fi
 
 ssh-keygen -A >/dev/null 2>&1
@@ -41,4 +45,7 @@ if [ -n "${NO_BORE}" ]; then
 fi
 
 # bore in the foreground (PID 1) so the container's lifetime tracks the tunnel.
+if [ -n "${TENDRIL_RELAY_JSON:-}" ]; then
+  exec /usr/local/bin/tendril-tunnel
+fi
 exec bore local 22 --to "${BORE_SERVER}"

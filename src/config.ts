@@ -36,8 +36,8 @@ export const config = {
   // Advertised price per HOUR (USD) — industry-standard hourly billing.
   pricePerHourUsd: Number(process.env.PRICE_PER_HOUR_USD ?? 1.0),
   sandbox: {
-    // SSH sandbox image (built locally on first run if missing). The renter gets
-    // a plain SSH shell, not a Jupyter server.
+    // OCI guest userspace. MicroVM cache is built before registration; legacy
+    // Docker builds the image on first use if missing.
     image: process.env.SANDBOX_IMAGE ?? "tendril-ssh-sandbox:latest",
     memory: process.env.SANDBOX_MEMORY ?? "2g",
     cpus: Number(process.env.SANDBOX_CPUS ?? 2),
@@ -52,4 +52,17 @@ export const config = {
   // SSH to loopback (handy when consumer + agent run on the same machine).
   tunnelMode: (process.env.TUNNEL_MODE ?? "bore") as "bore" | "local",
   heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS ?? 10_000),
+  /** Guest kernel for Firecracker. Not the host kernel. Empty keeps Docker. */
+  guestKernel: process.env.GUEST_KERNEL ?? "",
+  jailerBin: process.env.JAILER_BIN ?? "jailer",
+  firecrackerBin: process.env.FIRECRACKER_BIN ?? "firecracker",
+  /** Cache, lease metadata and jail trees. Empty uses /var/lib/tendril. */
+  stateDir: process.env.TENDRIL_STATE_DIR ?? "",
+  runtime: process.env.TENDRIL_RUNTIME ?? "auto",
+  jailerUid: Number(process.env.JAILER_UID ?? 123),
+  jailerGid: Number(process.env.JAILER_GID ?? 123),
+  cgroupParent: process.env.TENDRIL_CGROUP_PARENT ?? "tendril",
+  diskBytes: Number(process.env.GUEST_DISK_BYTES ?? 4 * 1024 ** 3),
+  vmmOverheadMib: Number(process.env.VMM_OVERHEAD_MIB ?? 128),
+  guestDns: process.env.GUEST_DNS ?? "1.1.1.1",
 };

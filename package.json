@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Tendril contributor agent — rent out this machine's CPU/RAM/GPU as hardened, ephemeral SSH sandboxes",
+  "description": "Tendril contributor agent \u2014 rent out this Linux machine's CPU/RAM as jailed Firecracker microVMs (legacy Docker fallback)",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "for t in src/runtime/*.test.ts; do tsx \"$t\" || exit 1; done"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
