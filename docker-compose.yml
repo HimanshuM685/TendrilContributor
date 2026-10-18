@@ -1,22 +1,17 @@
-# Tendril contributor agent — share THIS machine's compute.
+# Tendril contributor — Docker sandboxes. Works on Mac (Docker Desktop) and Linux.
 #
-#   cp .env.example .env      # set TENDRIL_API_KEY (minted in the web app)
+#   cp .env.example .env
 #   docker compose up --build
 #
-# Use `docker-compose` (with the hyphen) if you're on Compose v1.
+# Firecracker is Linux+KVM only: docker compose -f docker-compose.firecracker.yml up --build
 
 services:
   contributor:
     build: .
     image: tendril-contributor
     env_file: .env
-    # Launches sandboxes on the HOST Docker daemon (via the mounted socket) so it
-    # needs no Docker-in-Docker of its own. In the default TUNNEL_MODE=bore, each
-    # sandbox dials OUT for SSH, so host networking is NOT required.
-    #   ⚠ network_mode: host is only needed for TUNNEL_MODE=local (same-machine
-    #   SSH), and it doesn't share the host loopback on Docker Desktop (Mac/Win) —
-    #   there, run the agent natively (`npm run dev`) for local mode.
-    # network_mode: host
+    environment:
+      TENDRIL_RUNTIME: docker
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     restart: unless-stopped

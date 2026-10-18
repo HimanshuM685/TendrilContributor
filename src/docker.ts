@@ -83,7 +83,7 @@ function sandboxTag(): string | null {
  * used, which may differ from `image` when we substitute a content-tagged build
  * of the bundled sandbox.
  */
-async function ensureImage(image: string): Promise<string> {
+export async function ensureImage(image: string): Promise<string> {
   // An explicitly configured SANDBOX_IMAGE is the operator's to manage: we only
   // check it exists and never rebuild it from our context.
   const bundled = image === config.sandbox.image && existsSync(join(SANDBOX_CTX, "Dockerfile"));
@@ -97,8 +97,22 @@ async function ensureImage(image: string): Promise<string> {
   }
   if (!bundled) return tag; // nothing we can build; `docker run` will report it
 
-  console.log(`[docker] building sandbox image ${tag} from ${SANDBOX_CTX}…`);
-  await execFileP("docker", ["build", "-t", tag, SANDBOX_CTX], { maxBuffer: 50 * 1024 * 1024 });
+  console.log(`[docker] building sandbox image ${tag} (streamed context)…`);
+  // The CLI runs in this container; the daemon is the host's. A path build
+  // asks the host for /app/sandbox-ssh, which Docker Desktop cannot see.
+  // Streaming the context avoids that, and doing it before hello means a rent
+  // is a docker run, not a multi-minute build the registry kills at 45s.
+  try {
+    await execFileP(
+      "sh",
+      ["-c", "tar -C \"$1\" -czf - . | docker build -t \"$2\" -", "tendril-build", SANDBOX_CTX, tag],
+      { maxBuffer: 50 * 1024 * 1024 },
+    );
+  } catch (err) {
+    const detail = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+    console.error(`[docker] sandbox image build failed: ${detail}`);
+    throw err;
+  }
   return tag;
 }
 
@@ -197,7 +211,13 @@ export async function startSandbox(
     `[docker] starting SSH sandbox ${name} (${runImage})` +
       (local ? ` on 127.0.0.1:${hostPort}` : ` via bore (${config.sandbox.boreServer})`),
   );
-  await execFileP("docker", args, { maxBuffer: 10 * 1024 * 1024 });
+  try {
+    await execFileP("docker", args, { maxBuffer: 10 * 1024 * 1024 });
+  } catch (err) {
+    const detail = (err as { stderr?: string; message?: string }).stderr || (err as Error).message;
+    console.error(`[docker] sandbox launch failed: ${detail}`);
+    throw new Error(detail);
+  }
 
   if (local) {
     await waitForPort(hostPort);

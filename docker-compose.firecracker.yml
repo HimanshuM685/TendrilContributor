@@ -1,0 +1,26 @@
+# Linux + /dev/kvm only. Mac Docker Desktop cannot share /opt/tendril-kernel or KVM.
+#
+#   docker compose -f docker-compose.firecracker.yml up --build
+
+services:
+  contributor:
+    build: .
+    image: tendril-contributor
+    env_file: .env
+    environment:
+      TENDRIL_RUNTIME: ${TENDRIL_RUNTIME:-firecracker}
+      GUEST_KERNEL: ${GUEST_KERNEL:-/opt/tendril-kernel/vmlinux}
+      TENDRIL_STATE_DIR: /var/lib/tendril
+    privileged: true
+    network_mode: host
+    cgroup: private
+    init: true
+    devices:
+      - /dev/kvm
+      - /dev/net/tun
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/tendril:/var/lib/tendril
+      - /opt/tendril-kernel:/opt/tendril-kernel:ro
+    restart: unless-stopped
+    stop_grace_period: 90s
