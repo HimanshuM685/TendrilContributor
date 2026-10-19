@@ -13,7 +13,7 @@ import {
 } from "./protocol.js";
 import { config } from "./config.js";
 import { detectSpecs } from "./specs.js";
-import { ensureImage, runInSandbox, startSandbox, stopSandbox } from "./docker.js";
+import { runInSandbox, startSandbox, stopSandbox } from "./docker.js";
 
 if (!config.apiKey) {
   console.error(
@@ -27,7 +27,6 @@ const activeLeases = new Set<string>();
 let nodeId: string | undefined;
 
 async function main() {
-  await ensureImage(config.sandbox.image);
   const specs = await detectSpecs();
   console.log(`[agent] registry: ${config.registryUrl}`);
   console.log(`[agent] specs: ${specs.cpuCores} CPU, ${specs.ramMb}MB RAM, GPU=${specs.gpu ?? "none"}`);
