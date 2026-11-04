@@ -173,8 +173,8 @@ export async function startSandbox(
     "no-new-privileges",
   ];
 
-  // Exactly one of the two: a key the renter brought, or their address as the
-  // password. The entrypoint locks the root password outright under key auth.
+  // Interactive SSH sends a public key. SSH_PASSWORD is only for a non-login
+  // sandbox. The entrypoint locks the root password under key auth.
   if (sshPubKey) {
     args.push("-e", `SSH_PUBKEY=${sshPubKey}`);
   } else if (sshPassword) {

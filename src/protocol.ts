@@ -67,12 +67,11 @@ export interface StartContainerMsg {
   leaseId: string;
   image: string;
   limits: SandboxLimits;
-  /** SSH password to set inside the sandbox (the renter's address), or null. */
+  /** Set only for a non-login sandbox. SSH leases leave this null. */
   sshPassword: string | null;
   /**
-   * OpenSSH public key to write to the sandbox's `authorized_keys`. Takes
-   * precedence over `sshPassword` and is the only option that works for a
-   * renter with no session (nothing to use as a password).
+   * OpenSSH public key written to the sandbox's `authorized_keys`.
+   * SSH leases always send one. The private key never arrives here.
    */
   sshPubKey: string | null;
 }

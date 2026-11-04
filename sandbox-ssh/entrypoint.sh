@@ -10,9 +10,8 @@ mkdir -p /run/sshd
 sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
 
 if [ -n "${SSH_PUBKEY}" ]; then
-  # Key auth: the renter brought their own key, so no password exists at all.
-  # This is the only mode available to a caller with no session — there is no
-  # wallet address to use as a password.
+  # SSH leases install the renter's public key and lock password login.
+  # The private key is never in this environment.
   mkdir -p /root/.ssh
   printf '%s\n' "${SSH_PUBKEY}" > /root/.ssh/authorized_keys
   chmod 700 /root/.ssh
@@ -21,7 +20,7 @@ if [ -n "${SSH_PUBKEY}" ]; then
   sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
   sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
 else
-  # Password auth: the renter's own address is the password.
+  # Non-login sandboxes only. Not the renter's wallet address.
   : "${SSH_PASSWORD:=tendril}"
   echo "root:${SSH_PASSWORD}" | chpasswd
   sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config

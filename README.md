@@ -137,9 +137,9 @@ ack, so the platform can move every node at once.
 - **The image is content-tagged.** The sandbox tag folds a hash of `sandbox-ssh/Dockerfile` +
   `entrypoint.sh` into it, so editing the entrypoint rebuilds exactly when it should — a `:latest`
   cached forever would silently keep starting containers built from the old script.
-- **SSH auth** is a throwaway root container either way: a public key the renter sent
-  (`authorized_keys`, root password locked) or, failing that, a per-lease password (their wallet
-  address). Fine for ephemeral compute, but a password is a password.
+- **SSH auth** is a throwaway root container. The registry sends the renter's OpenSSH public
+  key (`SSH_PUBKEY` → `authorized_keys`, root password locked). The private key stays on the
+  renter's machine and never reaches this agent. `SSH_PASSWORD` is only for a non-login sandbox.
 - **Nothing is persisted.** Live leases are in memory; a restart drops them (the sockets die
   anyway). `SIGINT` destroys every sandbox on the way out.
 - **Money is the backend's job.** This agent never touches funds — it advertises a price, and the
