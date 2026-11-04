@@ -118,6 +118,7 @@ export async function startSandbox(
   limits: SandboxLimits,
   sshPassword: string | null,
   sshPubKey: string | null,
+  surface: "ssh" | "exec" = "ssh",
 ): Promise<SandboxEndpoint> {
   const image = imageOverride || config.sandbox.image;
   const runImage = await ensureImage(image);
@@ -152,7 +153,7 @@ export async function startSandbox(
     "256",
     "--cap-drop",
     "ALL",
-    // The few caps sshd needs to accept a root password login under PAM.
+    // Caps sshd needs for public-key root login.
     // SYS_CHROOT is required for sshd's privilege-separation chroot — without it
     // sshd accepts the TCP connection then drops it before the banner.
     "--cap-add",
@@ -173,9 +174,9 @@ export async function startSandbox(
     "no-new-privileges",
   ];
 
-  // Interactive SSH sends a public key. SSH_PASSWORD is only for a non-login
-  // sandbox. The entrypoint locks the root password under key auth.
-  if (sshPubKey) {
+  // SSH leases are public-key only. A password is only for a non-login sandbox.
+  if (surface !== "exec") {
+    if (!sshPubKey) throw new Error("SSH lease requires a public key");
     args.push("-e", `SSH_PUBKEY=${sshPubKey}`);
   } else if (sshPassword) {
     args.push("-e", `SSH_PASSWORD=${sshPassword}`);

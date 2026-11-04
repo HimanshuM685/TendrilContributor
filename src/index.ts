@@ -84,6 +84,7 @@ async function handleStart(socket: Socket, msg: StartContainerMsg) {
       msg.limits,
       msg.sshPassword,
       msg.sshPubKey,
+      msg.surface ?? "ssh",
     );
     const ready: ContainerReadyMsg = { leaseId: msg.leaseId, host, port };
     socket.emit(WS.containerReady, ready);

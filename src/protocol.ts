@@ -74,6 +74,10 @@ export interface StartContainerMsg {
    * SSH leases always send one. The private key never arrives here.
    */
   sshPubKey: string | null;
+  /** One-shot jobs have no SSH login. Old registries omit this and mean SSH. */
+  surface?: "ssh" | "exec";
+  /** Maximum lifetime of an exec sandbox. */
+  lifetimeMs?: number;
 }
 
 /** agent -> registry: the sandbox is up and reachable for SSH at host:port. */
