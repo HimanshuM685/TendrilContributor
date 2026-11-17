@@ -22,6 +22,13 @@ function normalizeRegistryUrl(raw: string): string {
   return url;
 }
 
+function csv(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 export const config = {
   // Where the registry lives. A contributor does not normally set this — the
   // default is the hosted Tendril backend; override only when self-hosting.
@@ -39,9 +46,22 @@ export const config = {
     // SSH sandbox image (built locally on first run if missing). The renter gets
     // a plain SSH shell, not a Jupyter server.
     image: process.env.SANDBOX_IMAGE ?? "tendril-ssh-sandbox:latest",
+    // Extra images this machine agrees to run when the registry asks for them.
+    // Anything not listed here (or above) is refused before `docker run`.
+    allowedImages: csv(process.env.SANDBOX_ALLOWED_IMAGES),
+    // CEILINGS. The registry may ask for less, never more: it is this
+    // machine's operator who decides how much of it is for rent.
     memory: process.env.SANDBOX_MEMORY ?? "2g",
     cpus: Number(process.env.SANDBOX_CPUS ?? 2),
-    gpus: process.env.SANDBOX_GPUS ?? "", // "all" to pass GPUs through
+    // Writable scratch (/work) per sandbox, RAM-backed and counted against the
+    // memory limit. Nothing a renter writes ever lands on the host disk.
+    disk: process.env.SANDBOX_DISK ?? "1g",
+    // "all" to pass GPUs through. Opt-in: passthrough mounts driver libraries
+    // and device nodes into the sandbox, widening the attack surface.
+    gpus: process.env.SANDBOX_GPUS ?? "",
+    // Per-lease netfilter rules that keep the sandbox off this host's LAN,
+    // the host itself, and cloud metadata. "off" only on an isolated box.
+    netGuard: (process.env.SANDBOX_NET_GUARD ?? "on") === "off" ? "off" : "on",
     // Reverse tunnel the sandbox dials out to, to expose SSH publicly. NOT from
     // the environment: the registry sends these in the hello ack, so the
     // platform can move every node to a different bore server at once.

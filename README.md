@@ -15,13 +15,25 @@ configure.
 You give *compute*, never filesystem or account access. The safety boundary isn't a permissions
 system — it's the container:
 
+- the renter is an **unprivileged user** (`tendril`, uid 1000), never root — even sshd runs as
+  that user; `--cap-drop ALL` with nothing added back, `--security-opt no-new-privileges`,
+- **read-only image**; the only writable space is a size-capped, RAM-backed `/work` + `/tmp`, so
+  nothing a renter writes ever touches your disk,
 - **no host filesystem mounts** (`-v` is never used for a sandbox),
-- **no inbound host ports** — the sandbox dials *out* over a [bore](https://github.com/ekzhang/bore)
-  tunnel for SSH (in `TUNNEL_MODE=local` it publishes SSH only to `127.0.0.1`),
-- nearly all Linux capabilities dropped (`--cap-drop ALL` plus only the handful sshd needs to let a
-  root login in, `--security-opt no-new-privileges`),
-- hard CPU / memory / PID caps (cgroups),
-- `--rm`: **destroyed the moment the lease ends.**
+- a private bridge network with inter-container traffic off, plus a per-lease **guard** sidecar
+  that installs netfilter rules the sandbox cannot change: your machine, your LAN and cloud
+  metadata are unreachable from inside; the public internet (pip, apt mirrors) stays reachable,
+- **no inbound host ports** — the guard dials *out* over a [bore](https://github.com/ekzhang/bore)
+  tunnel for SSH (in `TUNNEL_MODE=local` it publishes SSH only to `127.0.0.1`); the relay secret
+  is never inside the sandbox,
+- hard CPU / memory / PID / file-size caps, bounded container logs, and your `SANDBOX_*` settings
+  as ceilings the registry cannot exceed,
+- only the image you configured is ever run — a lease naming anything else is refused,
+- `--rm`: **destroyed the moment the lease ends**; leftovers from a crash are swept at start.
+
+What this does **not** cover: containers share your kernel. A kernel 0-day can still escape; the
+controls above make an escape land as an unprivileged user on a fenced network, not as root on
+your LAN. GPU passthrough (`SANDBOX_GPUS`) adds the driver stack to that surface — opt in knowingly.
 
 **This machine holds no wallet key.** It authenticates with an API key you mint in the web app; the
 wallet that minted it owns the node and receives the earnings. Losing the key costs you a node
@@ -123,8 +135,11 @@ Everything is read from `.env` (see [.env.example](.env.example)); an inline
 | `NODE_LABEL` | `tendril-node` | Human label shown in the explorer. |
 | `PRICE_PER_HOUR_USD` | `1.0` | Advertised hourly price. USDC has 6 decimals, so this × 1e6 is the atomic rate — no exchange rate to keep current. |
 | `SANDBOX_IMAGE` | `tendril-ssh-sandbox:latest` | Left as the default it's built from `./sandbox-ssh`; set it and the image is yours to manage (never rebuilt). |
-| `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `2g` / `2` | Per-sandbox cgroup caps. A `--cpus` above the daemon's CPU count is clamped, not rejected. |
-| `SANDBOX_GPUS` | *(empty)* | `all` to pass GPUs through (needs nvidia-container-toolkit). |
+| `SANDBOX_ALLOWED_IMAGES` | *(empty)* | Comma-separated extra images you agree to run when a lease asks. Anything else is refused. |
+| `SANDBOX_MEMORY` / `SANDBOX_CPUS` | `2g` / `2` | **Ceilings** per sandbox. The registry can ask for less, never more; `--cpus` is also clamped to the daemon's count. |
+| `SANDBOX_DISK` | `1g` | Writable `/work` per sandbox. RAM-backed, so it shares `SANDBOX_MEMORY` and is capped at it. |
+| `SANDBOX_GPUS` | *(empty)* | `all` to rent out GPUs (needs nvidia-container-toolkit). Opt-in; the node advertises a GPU only when set. |
+| `SANDBOX_NET_GUARD` | `on` | Per-lease firewall keeping renters off your host, LAN and cloud metadata. `off` only on an isolated box; logged as a warning. |
 | `TUNNEL_MODE` | `bore` | `bore` = dial out (works anywhere); `local` = publish SSH to `127.0.0.1`. |
 | `HEARTBEAT_INTERVAL_MS` | `10000` | Liveness ping interval. |
 | `REGISTRY_URL` | the hosted registry | Only for self-hosting the backend. A bare host gets `http://` prepended. |
@@ -137,13 +152,23 @@ ack, so the platform can move every node at once.
 - **The image is content-tagged.** The sandbox tag folds a hash of `sandbox-ssh/Dockerfile` +
   `entrypoint.sh` into it, so editing the entrypoint rebuilds exactly when it should — a `:latest`
   cached forever would silently keep starting containers built from the old script.
-- **SSH auth** is a throwaway root container. The registry sends the renter's OpenSSH public
-  key (`SSH_PUBKEY` → `authorized_keys`, root password locked). An SSH start with no public key
-  is refused. The private key stays on the renter's machine and never reaches this agent.
-  `SSH_PASSWORD` is only for a non-login (`surface: "exec"`) sandbox.
+- **SSH auth** is public-key only, as the unprivileged `tendril` user. The registry sends the
+  renter's OpenSSH public key (`SSH_PUBKEY` → `/work/.ssh/authorized_keys`); sshd itself runs as
+  that user with `PermitRootLogin no`, no PAM, no password, no X11/agent forwarding. An SSH start
+  with no public key is refused. The private key stays on the renter's machine and never reaches
+  this agent. Host keys are generated per sandbox and discarded with it.
+- **The guard sidecar** (`<sandbox>-guard`) is the only privileged piece: root with
+  `CAP_NET_ADMIN` (+ `SETUID/SETGID` used once to drop to uid 1000), sharing the sandbox's network
+  namespace only. It installs the iptables rules, then runs the bore client as uid 1000 — so
+  `BORE_SECRET` is in the guard's environment, never the renter's. If the rules can't be installed
+  the sandbox is torn down rather than started open.
+- **Start-up checks**: logs the daemon's security options (warns if no seccomp profile), removes
+  sandboxes left by a crashed agent, creates the private `tendril-sandbox` network, builds the
+  image, and warms two exec containers for one-shot jobs.
 - **Nothing is persisted.** Live leases are in memory; a restart drops them (the sockets die
   anyway). `SIGINT` destroys every sandbox on the way out.
 - **Money is the backend's job.** This agent never touches funds — it advertises a price, and the
   backend credits your balance when a lease closes.
-- **Job execution** (`run-job`) pipes the payload to `python3` inside an existing lease's sandbox
-  with a 120s timeout.
+- **Job execution** (`run-job`) pipes the payload to Python inside an existing lease's sandbox
+  under an in-container `timeout` (default 120s, max 15min) and a 12 MB output cap; either limit
+  stops the sandbox.

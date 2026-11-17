@@ -105,6 +105,8 @@ export interface RunJobMsg {
   leaseId: string;
   jobId: string;
   payload: string;
+  /** Enforced inside the container, not only by the registry's wait timer. */
+  timeoutMs?: number;
 }
 
 /** agent -> registry: job finished (or errored). */
@@ -126,3 +128,21 @@ export const WS = {
   runJob: "run-job",
   jobResult: "job-result",
 } as const;
+
+// ---------------------------------------------------------------------------
+// Run limits the agent enforces on its own, whatever the registry asks for.
+// Mirrors the backend's shared constants; keep them in step.
+// ---------------------------------------------------------------------------
+
+/** Job output cap (stdout + stderr); the sandbox is stopped past it. */
+export const JOB_RESULT_MAX_BYTES = 12_000_000;
+/** Longest a single job may run. */
+export const RUN_MAX_TIMEOUT_MS = 15 * 60_000;
+export const RUN_DEFAULT_TIMEOUT_MS = 120_000;
+
+/** Clamp a requested job timeout to [1s, RUN_MAX_TIMEOUT_MS]; junk means the default. */
+export function boundedRunTimeoutMs(value: number | null | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.min(RUN_MAX_TIMEOUT_MS, Math.max(1_000, Math.floor(value)))
+    : RUN_DEFAULT_TIMEOUT_MS;
+}
